@@ -9,7 +9,7 @@ SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 CREDS = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", SCOPE)
 client = gspread.authorize(CREDS)
 
-SHEET_ID = "your-google-sheet-id-here"
+SHEET_ID = "https://docs.google.com/spreadsheets/d/1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg/edit?usp=sharing"
 sheet = client.open_by_key(SHEET_ID).sheet1
 
 st.set_page_config(page_title="Environmental Enforcer Monitoring", layout="wide")
@@ -64,7 +64,7 @@ if name:
 
     if st.button("💾 Save Entry to Google Sheets"):
         sheet.append_rows(user_data, value_input_option="USER_ENTERED")
-        st.success("Entries successfully saved to Google Sheet!")
+        st.success("✅ Entries successfully saved to Google Sheet!")
 
     with st.expander("📊 View Submitted Data"):
         data = sheet.get_all_records()
