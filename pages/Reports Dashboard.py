@@ -197,27 +197,35 @@ if view == "Daily":
         use_container_width=True,
     )
 
-    # New line: centered donut with bottom legend
+    # New line: centered donut with wide, wrapped legend (no truncation)
     cat_share = dfv.groupby("Category", as_index=False)["Quantity"].sum()
+    
     donut = (
         alt.Chart(cat_share, title="Category Share")
-        .mark_arc(innerRadius=70, outerRadius=120)
+        .mark_arc(innerRadius=80, outerRadius=140)
         .encode(
             theta=alt.Theta("Quantity:Q", stack=True, title=""),
             color=alt.Color(
                 "Category:N",
-                legend=alt.Legend(title="Category", orient="bottom", labelLimit=250),
+                legend=alt.Legend(
+                    title="Category",
+                    orient="bottom",   # put legend below
+                    columns=2,         # wrap into two columns
+                    labelLimit=1000,   # effectively no truncation
+                ),
             ),
             tooltip=["Category:N", "Quantity:Q"],
         )
         .properties(
-            height=360,
-            width=360,
+            height=380,
+            width=620,                 # wider so legend has room
             padding={"left": 10, "right": 10, "top": 10, "bottom": 10},
         )
         .configure_view(stroke=None)
     )
-    left_pad, mid, right_pad = st.columns([1, 2, 1])  # center the donut
+    
+    # center the donut on its own row
+    left_pad, mid, right_pad = st.columns([1, 3, 1])
     with mid:
         st.altair_chart(donut, use_container_width=False)
 
