@@ -177,57 +177,49 @@ if view == "Daily":
         use_container_width=True,
     )
 
-    # Leaderboard + Donut row
+    # Summary: Leaderboard (full width)
     st.markdown("### 📌 Summary Charts")
-    col1, col2 = st.columns([1.6, 1])
+    leader = (
+        dfv.groupby("Enforcer", as_index=False)["Quantity"]
+        .sum()
+        .sort_values("Quantity", ascending=False)
+    )
+    st.altair_chart(
+        alt.Chart(leader)
+        .mark_bar()
+        .encode(
+            x=alt.X("Quantity:Q", title="Total"),
+            y=alt.Y("Enforcer:N", sort="-x", title="Enforcer"),
+            tooltip=["Enforcer:N", "Quantity:Q"],
+        )
+        .properties(height=320, title="Leaderboard (Enforcer Totals)")
+        .configure_view(stroke=None),
+        use_container_width=True,
+    )
 
-    with col1:
-        leader = (
-            dfv.groupby("Enforcer", as_index=False)["Quantity"]
-            .sum()
-            .sort_values("Quantity", ascending=False)
+    # New line: centered donut with bottom legend
+    cat_share = dfv.groupby("Category", as_index=False)["Quantity"].sum()
+    donut = (
+        alt.Chart(cat_share, title="Category Share")
+        .mark_arc(innerRadius=70, outerRadius=120)
+        .encode(
+            theta=alt.Theta("Quantity:Q", stack=True, title=""),
+            color=alt.Color(
+                "Category:N",
+                legend=alt.Legend(title="Category", orient="bottom", labelLimit=250),
+            ),
+            tooltip=["Category:N", "Quantity:Q"],
         )
-        bar_chart = (
-            alt.Chart(leader)
-            .mark_bar()
-            .encode(
-                x=alt.X("Quantity:Q", title="Total"),
-                y=alt.Y("Enforcer:N", sort="-x", title="Enforcer"),
-                tooltip=["Enforcer:N", "Quantity:Q"],
-            )
-            .properties(height=320, title="Leaderboard (Enforcer Totals)")
-            .configure_view(stroke=None)
+        .properties(
+            height=360,
+            width=360,
+            padding={"left": 10, "right": 10, "top": 10, "bottom": 10},
         )
-        st.altair_chart(bar_chart, use_container_width=True)
-
-    with col2:
-        cat_share = dfv.groupby("Category", as_index=False)["Quantity"].sum()
-        donut = (
-            alt.Chart(cat_share, title="Category Share")
-            .mark_arc(innerRadius=70, outerRadius=120)
-            .encode(
-                theta=alt.Theta("Quantity:Q", stack=True, title=""),
-                color=alt.Color(
-                    "Category:N",
-                    legend=alt.Legend(
-                        title="Category",
-                        orient="right",
-                        labelLimit=200,
-                        symbolLimit=200,
-                    ),
-                ),
-                tooltip=["Category:N", "Quantity:Q"],
-            )
-            .properties(
-                height=320,
-                padding={"left": 20, "right": 20, "top": 10, "bottom": 10},
-            )
-            .configure_view(stroke=None)
-        )
-        # center donut within the column
-        s1, mid, s2 = st.columns([0.1, 0.8, 0.1])
-        with mid:
-            st.altair_chart(donut, use_container_width=True)
+        .configure_view(stroke=None)
+    )
+    left_pad, mid, right_pad = st.columns([1, 2, 1])  # center the donut
+    with mid:
+        st.altair_chart(donut, use_container_width=False)
 
     # Heatmap: Category × Enforcer
     heat = dfv.groupby(["Category", "Enforcer"], as_index=False)["Quantity"].sum()
