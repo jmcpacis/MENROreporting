@@ -248,14 +248,14 @@ if view == "Daily":
                     title="Category",
                     orient="bottom",
                     columns=2,
-                    labelLimit=1000,
+                    labelLimit=10000,
                 ),
             ),
             tooltip=["Category:N", "Quantity:Q"],
         )
         .properties(
             height=380,
-            width=620,
+            width=820,
             padding={"left": 10, "right": 10, "top": 10, "bottom": 10},
         )
         .configure_view(stroke=None)
