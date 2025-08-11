@@ -4,6 +4,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import altair as alt
 import time
+from datetime import timedelta
 
 # -------------------
 # Config
@@ -65,6 +66,28 @@ def load_all():
 
 df = load_all()
 
+# ---------- KPI helpers (add-on) ----------
+def pct_change(curr: int, prev: int):
+    """Return % change rounded to 1 dp; None if prev==0 or missing."""
+    if prev is None or prev == 0:
+        return None
+    return round((curr - prev) / prev * 100.0, 1)
+
+def fmt_delta(p):
+    """Format % change with arrow for Streamlit metric."""
+    if p is None:
+        return "—"
+    arrow = "↑" if p > 0 else ("↓" if p < 0 else "→")
+    return f"{arrow} {abs(p)}%"
+
+def ytd_total(df_base: pd.DataFrame, end_dt: pd.Timestamp) -> int:
+    """Cumulative total from Jan 1 to end_dt (inclusive)."""
+    if pd.isna(end_dt):
+        return 0
+    start = pd.Timestamp(end_dt.year, 1, 1)
+    m = (df_base["Date"] >= start) & (df_base["Date"] <= end_dt)
+    return int(df_base.loc[m, "Quantity"].sum())
+
 # -------------------
 # Controls (persisted)
 # -------------------
@@ -101,6 +124,9 @@ if dfv.empty:
     st.info("No data to display for the current selection.")
     st.stop()
 
+# Base DF filtered only by enforcers (no date limits) for KPIs like yesterday/last month/YTD
+df_enf = df[df["Enforcer"].isin(effective_selection)].copy()
+
 def download_filtered(name: str, frame: pd.DataFrame):
     st.download_button(
         f"⬇️ Download {name} CSV",
@@ -130,23 +156,35 @@ if view == "Daily":
         st.info("No data in the selected date range.")
         st.stop()
 
-    # KPIs (expanded)
-    total = int(dfv["Quantity"].sum())
-    days = dfv["Date"].nunique()
-    avg_per_day = round(total / days, 1) if days else 0
-    top_act_row = (
-        dfv.groupby("Activity", as_index=False)["Quantity"]
-        .sum()
-        .sort_values("Quantity", ascending=False)
-        .head(1)
+    # ---------- KPIs (Daily) ----------
+    # Most productive enforcer (within current selected date range)
+    leader_tbl = (
+        dfv.groupby("Enforcer", as_index=False)["Quantity"]
+           .sum()
+           .sort_values("Quantity", ascending=False)
     )
+    top_name = leader_tbl.iloc[0]["Enforcer"] if not leader_tbl.empty else "—"
+    top_qty  = int(leader_tbl.iloc[0]["Quantity"]) if not leader_tbl.empty else 0
 
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Total actions", total)
-    k2.metric("Active enforcers", dfv["Enforcer"].nunique())
-    k3.metric("Active days", days)
-    k4.metric("Avg / day", avg_per_day)
-    k5.metric("Top activity", top_act_row.iloc[0]["Activity"] if not top_act_row.empty else "—")
+    # % of Enforcers Active (in current selection/range)
+    active_enf = dfv["Enforcer"].nunique()
+    pct_active = round(100.0 * active_enf / len(ENFORCERS), 1) if ENFORCERS else 0
+
+    # Change vs YESTERDAY (compare latest date in view vs previous calendar day)
+    end_dt = pd.to_datetime(dfv["Date"].max())  # last date in the current view
+    curr_day_total = int(df_enf.loc[df_enf["Date"] == end_dt, "Quantity"].sum())
+    prev_day_total = int(df_enf.loc[df_enf["Date"] == (end_dt - timedelta(days=1)), "Quantity"].sum())
+    delta_pct = pct_change(curr_day_total, prev_day_total)
+    delta_str = fmt_delta(delta_pct)
+
+    # Cumulative YTD (to end_dt), filtered by enforcers
+    ytd = ytd_total(df_enf, end_dt)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Most productive enforcer", f"{top_name}", f"{top_qty} actions")
+    k2.metric("% of enforcers active", f"{pct_active}%")
+    k3.metric("Change vs yesterday", f"{curr_day_total} actions", delta_str)
+    k4.metric("Cumulative total (YTD)", f"{ytd}")
 
     # Total by day
     daily_tot = dfv.groupby("Date", as_index=False)["Quantity"].sum()
@@ -199,7 +237,6 @@ if view == "Daily":
 
     # New line: centered donut with wide, wrapped legend (no truncation)
     cat_share = dfv.groupby("Category", as_index=False)["Quantity"].sum()
-    
     donut = (
         alt.Chart(cat_share, title="Category Share")
         .mark_arc(innerRadius=80, outerRadius=140)
@@ -209,23 +246,21 @@ if view == "Daily":
                 "Category:N",
                 legend=alt.Legend(
                     title="Category",
-                    orient="bottom",   # put legend below
-                    columns=2,         # wrap into two columns
-                    labelLimit=1000,   # effectively no truncation
+                    orient="bottom",
+                    columns=2,
+                    labelLimit=1000,
                 ),
             ),
             tooltip=["Category:N", "Quantity:Q"],
         )
         .properties(
             height=380,
-            width=620,                 # wider so legend has room
+            width=620,
             padding={"left": 10, "right": 10, "top": 10, "bottom": 10},
         )
         .configure_view(stroke=None)
     )
-    
-    # center the donut on its own row
-    left_pad, mid, right_pad = st.columns([1, 3, 1])
+    left_pad, mid, right_pad = st.columns([1, 3, 1])  # center the donut
     with mid:
         st.altair_chart(donut, use_container_width=False)
 
@@ -262,10 +297,45 @@ else:
     selected_names = ", ".join(sorted(dfv["Enforcer"].unique()))
     st.caption(f"Showing data for: **{selected_names or '—'}**")
 
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Total actions (selected months)", int(dfv["Quantity"].sum()))
-    k2.metric("Active enforcers", dfv["Enforcer"].nunique())
-    k3.metric("Months selected", len(sel) if sel else len(months))
+    # ---------- KPIs (Monthly) ----------
+    # Most productive enforcer (within selected months)
+    leader_tbl = (
+        dfv.groupby("Enforcer", as_index=False)["Quantity"]
+           .sum()
+           .sort_values("Quantity", ascending=False)
+    )
+    top_name = leader_tbl.iloc[0]["Enforcer"] if not leader_tbl.empty else "—"
+    top_qty  = int(leader_tbl.iloc[0]["Quantity"]) if not leader_tbl.empty else 0
+
+    # % of Enforcers Active (in selected months)
+    active_enf = dfv["Enforcer"].nunique()
+    pct_active = round(100.0 * active_enf / len(ENFORCERS), 1) if ENFORCERS else 0
+
+    # Change vs LAST MONTH (based on latest month present in dfv)
+    if dfv["Date"].notna().any():
+        last_dt = pd.to_datetime(dfv["Date"].max())
+        curr_period = last_dt.to_period("M")
+        prev_period = curr_period - 1
+
+        curr_month_total = int(df_enf.loc[df_enf["Date"].dt.to_period("M") == curr_period, "Quantity"].sum())
+        prev_month_total = int(df_enf.loc[df_enf["Date"].dt.to_period("M") == prev_period, "Quantity"].sum())
+        end_of_month_dt = pd.Timestamp(curr_period.end_time)
+    else:
+        curr_month_total = 0
+        prev_month_total = 0
+        end_of_month_dt = pd.Timestamp.today()
+
+    delta_pct = pct_change(curr_month_total, prev_month_total)
+    delta_str = fmt_delta(delta_pct)
+
+    # Cumulative YTD (to the end of latest month)
+    ytd = ytd_total(df_enf, end_of_month_dt)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Most productive enforcer", f"{top_name}", f"{top_qty} actions")
+    k2.metric("% of enforcers active", f"{pct_active}%")
+    k3.metric("Change vs last month", f"{curr_month_total} actions", delta_str)
+    k4.metric("Cumulative total (YTD)", f"{ytd}")
 
     # Totals per month (by Enforcer)
     month_enf = dfv.groupby(["Month", "Enforcer"], as_index=False)["Quantity"].sum()
