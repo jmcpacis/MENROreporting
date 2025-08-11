@@ -9,7 +9,7 @@ SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 CREDS = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], SCOPE)
 client = gspread.authorize(CREDS)
 
-SHEET_ID = "https://docs.google.com/spreadsheets/d/1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg/edit?usp=sharing"
+SHEET_ID = "1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg"
 sheet = client.open_by_key(SHEET_ID).sheet1
 
 st.set_page_config(page_title="Environmental Enforcer Monitoring", layout="wide")
