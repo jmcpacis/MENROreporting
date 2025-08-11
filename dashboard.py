@@ -13,7 +13,7 @@ SHEET_ID = "1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg"
 sheet = client.open_by_key(SHEET_ID).sheet1
 
 st.set_page_config(page_title="Environmental Enforcer Monitoring", layout="wide")
-st.title("🌿 Environmental Enforcer Monitoring Dashboard (Google Sheets Version)")
+st.title("🌿 Environmental Enforcer Monitoring Dashboard")
 
 categories = {
     "I. Issuance of Citation Tickets": [
