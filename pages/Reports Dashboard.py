@@ -246,8 +246,8 @@ if view == "Daily":
                 "Category:N",
                 legend=alt.Legend(
                     title="Category",
-                    orient="right",
-                    columns=2,
+                    orient="bottom",
+                    columns=1,
                     labelLimit=10000,
                 ),
             ),
