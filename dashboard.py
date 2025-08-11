@@ -10,7 +10,7 @@ import datetime
 # =========================
 SHEET_ID = "1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg"  # << your spreadsheet ID
 ENFORCERS = ["", "Enforcer 1", "Enforcer 2", "Enforcer 3", "Enforcer 4", "Enforcer 5"]
-PER_ENFORCER_REPORTS = True  # set False if you don't want separate per-enforcer reports
+PER_ENFORCER_REPORTS = False  # set False if you don't want separate per-enforcer reports
 
 REPORT_TABS = {"Daily Report", "Monthly Report"}  # global (all enforcers) report tabs
 
