@@ -6,29 +6,38 @@ import pandas as pd
 import datetime
 import time
 
-# ==== Config ====
+# =========================
+# Config
+# =========================
 SHEET_ID = "1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg"
 ENFORCERS = ["", "Enforcer 1", "Enforcer 2", "Enforcer 3", "Enforcer 4", "Enforcer 5"]
 EXPECTED_HEADERS = ["Date", "Enforcer", "Category", "Activity", "Quantity", "Remarks"]
-
-# ==== Auth (cached) ====
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
+# =========================
+# Page
+# =========================
+st.set_page_config(page_title="Environmental Enforcer Monitoring", layout="wide")
+st.title("🌿 Environmental Enforcer Monitoring (Entry)")
+
+# =========================
+# Auth (cached)
+# =========================
 @st.cache_resource(show_spinner=False)
 def get_client_and_sheet():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], SCOPE)
     client = gspread.authorize(creds)
-    for i in range(3):  # retry for transient API hiccups
+    for i in range(3):  # retry for transient 5xx
         try:
             return client, client.open_by_key(SHEET_ID)
         except Exception:
             if i == 2:
                 raise
-            time.sleep(1.5)
+            time.sleep(1.2)
 
 client, spreadsheet = get_client_and_sheet()
 
-def get_or_create_ws(title):
+def get_or_create_ws(title: str):
     try:
         return spreadsheet.worksheet(title)
     except WorksheetNotFound:
@@ -40,14 +49,25 @@ def ensure_headers(ws):
     values = ws.get_all_values()
     if not values:
         ws.append_row(EXPECTED_HEADERS)
-        return
-    if values[0] != EXPECTED_HEADERS:
+    elif values[0] != EXPECTED_HEADERS:
         ws.insert_row(EXPECTED_HEADERS, index=1)
 
-# ==== UI ====
-st.set_page_config(page_title="Environmental Enforcer Monitoring", layout="wide")
-st.title("🌿 Environmental Enforcer Monitoring (Entry)")
+# =========================
+# Counter helpers (safe with Streamlit state)
+# =========================
+def _inc(k):
+    st.session_state[k] = int(st.session_state.get(k, 0)) + 1
 
+def _dec(k):
+    st.session_state[k] = max(0, int(st.session_state.get(k, 0)) - 1)
+
+def _sync(src_key, dest_key):
+    # copy number_input's value into the canonical counter
+    st.session_state[dest_key] = int(st.session_state.get(src_key, 0))
+
+# =========================
+# UI
+# =========================
 name = st.selectbox("Select Your Name", ENFORCERS)
 if not name:
     st.info("Please select your name to begin.")
@@ -91,37 +111,39 @@ st.markdown("---")
 for cat, acts in categories.items():
     st.subheader(cat)
     for act in acts:
-        # Unique keys per enforcer+activity
-        qty_key = f"{name}_{act}_qty"
+        # canonical counter key + separate widget key to avoid conflicts
+        counter_key = f"{name}_{act}_qty"
+        num_widget_key = f"{counter_key}_num"
         remark_key = f"{name}_{act}_remark"
-        if qty_key not in st.session_state:
-            st.session_state[qty_key] = 0
 
-        c1, c2, c3 = st.columns([2.7, 1.3, 4])  # label | controls | remarks
+        if counter_key not in st.session_state:
+            st.session_state[counter_key] = 0
 
+        c1, c2, c3 = st.columns([2.7, 1.6, 4])  # label | controls | remarks
         with c1:
             st.markdown(f"**{act}**")
 
-        # --- Custom +/- controls + number field (kept in sync) ---
         with c2:
             b1, ncol, b2 = st.columns([1, 2, 1])
+
             with b1:
-                if st.button("−", key=f"{qty_key}_minus"):
-                    if st.session_state[qty_key] > 0:
-                        st.session_state[qty_key] -= 1
+                st.button("−", key=f"{counter_key}_minus", on_click=_dec, args=(counter_key,))
+
             with ncol:
-                # number_input is bound to the same key -> stays in sync with buttons
                 st.number_input(
                     f"{act}_qty",
-                    key=qty_key,
+                    key=num_widget_key,
                     min_value=0,
                     step=1,
+                    value=int(st.session_state[counter_key]),
                     label_visibility="collapsed",
                     format="%d",
+                    on_change=_sync,
+                    args=(num_widget_key, counter_key),
                 )
+
             with b2:
-                if st.button("+", key=f"{qty_key}_plus"):
-                    st.session_state[qty_key] += 1
+                st.button("+", key=f"{counter_key}_plus", on_click=_inc, args=(counter_key,))
 
         with c3:
             st.text_input(
@@ -131,10 +153,13 @@ for cat, acts in categories.items():
                 label_visibility="collapsed",
             )
 
-        qty = int(st.session_state[qty_key])
+        qty = int(st.session_state[counter_key])
         remark = st.session_state.get(remark_key, "")
         rows_to_save.append([today, name, cat, act, qty, remark])
 
+# =========================
+# Save & View
+# =========================
 if st.button("💾 Save Entry"):
     ws.append_rows(rows_to_save, value_input_option="USER_ENTERED")
     st.success(f"✅ Saved to sheet tab: {name}")
