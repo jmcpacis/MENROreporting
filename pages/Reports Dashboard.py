@@ -294,7 +294,7 @@ if view == "Daily":
         .sort_values("Quantity", ascending=False)
     )
     donut = (
-        alt.Chart(cat_share, title="Category Share")
+        alt.Chart(cat_share, title="")
         .mark_arc(innerRadius=90, outerRadius=140)
         .encode(
             theta=alt.Theta("Quantity:Q", stack=True, title=None),
