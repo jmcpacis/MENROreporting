@@ -1,12 +1,20 @@
 import streamlit as st
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import datetime
 
-# App title
-st.set_page_config(page_title="Environmental Enforcer Dashboard", layout="wide")
-st.title("Environmental Enforcer Monitoring Dashboard")
+# Connect to Google Sheet
+SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+CREDS = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", SCOPE)
+client = gspread.authorize(CREDS)
 
-# Sample structure
+SHEET_ID = "your-google-sheet-id-here"
+sheet = client.open_by_key(SHEET_ID).sheet1
+
+st.set_page_config(page_title="Environmental Enforcer Monitoring", layout="wide")
+st.title("🌿 Environmental Enforcer Monitoring Dashboard (Google Sheets Version)")
+
 categories = {
     "I. Issuance of Citation Tickets": [
         "No Tree-Cutting Permit",
@@ -20,7 +28,7 @@ categories = {
         "Other Environmental Ordinance Violations"
     ],
     "II. Surveillance, Investigation, Monitoring, Documentation, and Inspection": [
-        "Binangonan Kalinisan Patrol (BKP) – Documentation of open dumping of waste in barangays",
+        "Binangonan Kalinisan Patrol (BKP)",
         "Handling of Environmental Complaints",
         "Response to Environmental Incidents",
         "Delivery of Letters and Notices",
@@ -35,69 +43,33 @@ categories = {
     ]
 }
 
-# Session state to store counters and remarks
-if "activity_data" not in st.session_state:
-    st.session_state.activity_data = {}
-
-# User login (for tracking individual input)
 name = st.selectbox("Select Your Name", ["", "Enforcer 1", "Enforcer 2", "Enforcer 3", "Enforcer 4", "Enforcer 5"])
 
 if name:
+    user_data = []
+    st.markdown("---")
+
     for cat, activities in categories.items():
         st.subheader(cat)
         for activity in activities:
-            key_count = f"{name}_{activity}_count"
-            key_remark = f"{name}_{activity}_remark"
-
-            col1, col2 = st.columns([1, 3])
+            col1, col2, col3 = st.columns([2.5, 1, 4])
             with col1:
-                st.number_input(
-                    f"{activity} - Count",
-                    min_value=0,
-                    key=key_count,
-                    step=1,
-                    label_visibility="collapsed"
-                )
+                st.markdown(f"**{activity}**")
             with col2:
-                st.text_input(
-                    f"{activity} - Remarks",
-                    key=key_remark,
-                    placeholder="Enter remarks or details here...",
-                    label_visibility="collapsed"
-                )
+                qty = st.number_input(f"{activity}_qty", label_visibility="collapsed", min_value=0, step=1, key=f"{activity}_qty")
+            with col3:
+                remark = st.text_input(f"{activity}_remark", label_visibility="collapsed", placeholder="Remarks or details", key=f"{activity}_remark")
 
-    if st.button("💾 Save Entry"):
-        date_key = str(datetime.date.today())
-        for cat, activities in categories.items():
-            for activity in activities:
-                count = st.session_state.get(f"{name}_{activity}_count", 0)
-                remark = st.session_state.get(f"{name}_{activity}_remark", "")
+            user_data.append([str(datetime.date.today()), name, cat, activity, qty, remark])
 
-                record = {
-                    "Date": date_key,
-                    "Enforcer": name,
-                    "Category": cat,
-                    "Activity": activity,
-                    "Quantity": count,
-                    "Remarks": remark
-                }
+    if st.button("💾 Save Entry to Google Sheets"):
+        sheet.append_rows(user_data, value_input_option="USER_ENTERED")
+        st.success("Entries successfully saved to Google Sheet!")
 
-                if date_key not in st.session_state.activity_data:
-                    st.session_state.activity_data[date_key] = []
-
-                st.session_state.activity_data[date_key].append(record)
-
-        st.success("Entries saved successfully!")
-
-    # View Report
-    with st.expander("📊 View Today's Summary Report"):
-        today_data = st.session_state.activity_data.get(str(datetime.date.today()), [])
-        if today_data:
-            df = pd.DataFrame(today_data)
-            st.dataframe(df)
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Download CSV", data=csv, file_name="daily_environmental_report.csv", mime="text/csv")
-        else:
-            st.info("No data submitted yet today.")
+    with st.expander("📊 View Submitted Data"):
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        st.dataframe(df)
+        st.download_button("⬇️ Download as CSV", df.to_csv(index=False), "monitoring_data.csv", "text/csv")
 else:
-    st.warning("Please select your name to begin inputting your activities.")
+    st.warning("Please select your name to begin inputting data.")
