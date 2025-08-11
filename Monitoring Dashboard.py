@@ -143,7 +143,7 @@ for cat, acts in categories.items():
                 )
 
             with b2:
-                st.button("+", key=f"{counter_key}_plus", on_click=_inc, args=(counter_key,))
+                st.button("＋", key=f"{counter_key}_plus", on_click=_inc, args=(counter_key,))
 
         with c3:
             st.text_input(
