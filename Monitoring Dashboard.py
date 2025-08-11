@@ -18,12 +18,12 @@ SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 def get_client_and_sheet():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], SCOPE)
     client = gspread.authorize(creds)
-    # little retry for transient 5xx
-    for i in range(3):
+    for i in range(3):  # retry for transient API hiccups
         try:
             return client, client.open_by_key(SHEET_ID)
         except Exception:
-            if i == 2: raise
+            if i == 2:
+                raise
             time.sleep(1.5)
 
 client, spreadsheet = get_client_and_sheet()
@@ -37,13 +37,11 @@ def get_or_create_ws(title):
         return ws
 
 def ensure_headers(ws):
-    """Guarantee first row equals EXPECTED_HEADERS; insert if missing/wrong."""
     values = ws.get_all_values()
     if not values:
         ws.append_row(EXPECTED_HEADERS)
         return
-    first = values[0]
-    if first != EXPECTED_HEADERS:
+    if values[0] != EXPECTED_HEADERS:
         ws.insert_row(EXPECTED_HEADERS, index=1)
 
 # ==== UI ====
@@ -93,14 +91,48 @@ st.markdown("---")
 for cat, acts in categories.items():
     st.subheader(cat)
     for act in acts:
-        c1, c2, c3 = st.columns([2.5, 1, 4])
-        with c1: st.markdown(f"**{act}**")
+        # Unique keys per enforcer+activity
+        qty_key = f"{name}_{act}_qty"
+        remark_key = f"{name}_{act}_remark"
+        if qty_key not in st.session_state:
+            st.session_state[qty_key] = 0
+
+        c1, c2, c3 = st.columns([2.7, 1.3, 4])  # label | controls | remarks
+
+        with c1:
+            st.markdown(f"**{act}**")
+
+        # --- Custom +/- controls + number field (kept in sync) ---
         with c2:
-            qty = st.number_input(f"{act}_qty", min_value=0, step=1,
-                                  key=f"{name}_{act}_qty", label_visibility="collapsed")
+            b1, ncol, b2 = st.columns([1, 2, 1])
+            with b1:
+                if st.button("−", key=f"{qty_key}_minus"):
+                    if st.session_state[qty_key] > 0:
+                        st.session_state[qty_key] -= 1
+            with ncol:
+                # number_input is bound to the same key -> stays in sync with buttons
+                st.number_input(
+                    f"{act}_qty",
+                    key=qty_key,
+                    min_value=0,
+                    step=1,
+                    label_visibility="collapsed",
+                    format="%d",
+                )
+            with b2:
+                if st.button("+", key=f"{qty_key}_plus"):
+                    st.session_state[qty_key] += 1
+
         with c3:
-            remark = st.text_input(f"{act}_remark", placeholder="Remarks or details",
-                                   key=f"{name}_{act}_remark", label_visibility="collapsed")
+            st.text_input(
+                f"{act}_remark",
+                key=remark_key,
+                placeholder="Remarks or details",
+                label_visibility="collapsed",
+            )
+
+        qty = int(st.session_state[qty_key])
+        remark = st.session_state.get(remark_key, "")
         rows_to_save.append([today, name, cat, act, qty, remark])
 
 if st.button("💾 Save Entry"):
