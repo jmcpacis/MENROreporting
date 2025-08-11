@@ -21,9 +21,11 @@ st.title("📊 Manager Dashboard (All Enforcers)")
 # -------------------
 @st.cache_resource(show_spinner=False)
 def get_spreadsheet():
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], SCOPE)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(
+        st.secrets["gcp_service_account"], SCOPE
+    )
     client = gspread.authorize(creds)
-    for i in range(3):  # tiny retry for transient 5xx
+    for i in range(3):  # retry for transient 5xx
         try:
             return client.open_by_key(SHEET_ID)
         except Exception:
@@ -39,7 +41,7 @@ spreadsheet = get_spreadsheet()
 @st.cache_data(ttl=60)
 def load_all():
     frames = []
-    for title in ENFORCERS:  # read only the 5 tabs
+    for title in ENFORCERS:
         try:
             ws = spreadsheet.worksheet(title)
         except gspread.exceptions.WorksheetNotFound:
@@ -63,39 +65,28 @@ def load_all():
 df = load_all()
 
 # -------------------
-# Controls (persisted)
+# Controls
 # -------------------
 left, right = st.columns(2)
 with left:
     view = st.radio("View", ["Daily", "Monthly"], horizontal=True)
 
-# keep filter selection persistent
-if "enf_filter" not in st.session_state:
-    st.session_state.enf_filter = []
-
 with right:
-    chosen = st.multiselect("Filter Enforcers", ENFORCERS, default=st.session_state.enf_filter, key="enf_filter")
+    chosen = st.multiselect("Filter Enforcers", ENFORCERS, default=[])
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Select All"):
-            st.session_state.enf_filter = ENFORCERS[:]
-            chosen = st.session_state.enf_filter
+            chosen = ENFORCERS[:]
     with c2:
         if st.button("Clear"):
-            st.session_state.enf_filter = []
-            chosen = st.session_state.enf_filter
+            chosen = []
 
-# Treat empty selection as ALL
 effective_selection = chosen if chosen else ENFORCERS
 dfv = df[df["Enforcer"].isin(effective_selection)] if not df.empty else df
 
 if dfv.empty:
     st.info("No data to display for the current selection.")
     st.stop()
-
-# small helper for CSV of current view
-def download_filtered(name: str, frame: pd.DataFrame):
-    st.download_button(f"⬇️ Download {name} CSV", frame.to_csv(index=False), f"{name.lower().replace(' ', '_')}.csv", "text/csv")
 
 # -------------------
 # Daily view
@@ -118,113 +109,105 @@ if view == "Daily":
         st.info("No data in the selected date range.")
         st.stop()
 
-    # ---- KPIs (expanded) ----
-    total = int(dfv["Quantity"].sum())
-    days = dfv["Date"].nunique()
-    avg_per_day = round(total / days, 1) if days else 0
-    top_act_row = (dfv.groupby("Activity", as_index=False)["Quantity"].sum()
-                     .sort_values("Quantity", ascending=False).head(1))
-    top_cat_row = (dfv.groupby("Category", as_index=False)["Quantity"].sum()
-                     .sort_values("Quantity", ascending=False).head(1))
-
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Total actions", total)
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Total actions", int(dfv["Quantity"].sum()))
     k2.metric("Active enforcers", dfv["Enforcer"].nunique())
-    k3.metric("Active days", days)
-    k4.metric("Avg / day", avg_per_day)
-    k5.metric("Top activity", top_act_row.iloc[0]["Activity"] if not top_act_row.empty else "—")
+    k3.metric("Active days", dfv["Date"].nunique())
 
-    # ---- Total by day line ----
     daily_tot = dfv.groupby("Date", as_index=False)["Quantity"].sum()
     st.altair_chart(
         alt.Chart(daily_tot).mark_line(point=True).encode(
             x=alt.X("Date:T", title="Date"),
             y=alt.Y("Quantity:Q", title="Total"),
             tooltip=["Date:T", "Quantity:Q"],
-        ).properties(height=260, title="Total Actions per Day"),
+        ).properties(height=280, title="Total Actions per Day"),
         use_container_width=True,
     )
 
-    # ---- Enforcer leaderboard ----
-    enforcer_tot = dfv.groupby("Enforcer", as_index=False)["Quantity"].sum().sort_values("Quantity", ascending=False)
+    cat_tot = dfv.groupby(["Category", "Enforcer"], as_index=False)["Quantity"].sum()
     st.altair_chart(
-        alt.Chart(enforcer_tot).mark_bar().encode(
+        alt.Chart(cat_tot).mark_bar().encode(
             x=alt.X("Quantity:Q", title="Total"),
-            y=alt.Y("Enforcer:N", sort="-x"),
-            tooltip=["Enforcer:N", "Quantity:Q"],
-        ).properties(height=220, title="Leaderboard (Enforcer Totals)"),
-        use_container_width=True,
-    )
-
-    # ---- Category share donut ----
-    cat_share = dfv.groupby("Category", as_index=False)["Quantity"].sum()
-    donut = alt.Chart(cat_share).mark_arc(innerRadius=60).encode(
-        theta="Quantity:Q",
-        color="Category:N",
-        tooltip=["Category:N", "Quantity:Q"],
-    ).properties(height=260, width=260, title="Category Share")
-    st.altair_chart(donut, use_container_width=False)
-
-    # ---- Category × Enforcer heatmap ----
-    heat = dfv.groupby(["Category", "Enforcer"], as_index=False)["Quantity"].sum()
-    st.altair_chart(
-        alt.Chart(heat).mark_rect().encode(
-            x=alt.X("Enforcer:N", title=None),
-            y=alt.Y("Category:N", title=None),
-            color=alt.Color("Quantity:Q", title="Qty"),
+            y=alt.Y("Category:N", sort="-x", title="Category"),
+            color=alt.Color("Enforcer:N"),
             tooltip=["Category:N", "Enforcer:N", "Quantity:Q"],
-        ).properties(height=280, title="Heatmap: Category × Enforcer"),
+        ).properties(height=320, title="Category Breakdown (stacked by Enforcer)"),
         use_container_width=True,
     )
-
-    download_filtered("Daily filtered", dfv)
 
 # -------------------
 # Monthly view
 # -------------------
 else:
     months = sorted(dfv["Month"].dropna().unique())
-    sel = st.multiselect("Select Month(s)", months, default=months)  # default = ALL months
+    sel = st.multiselect("Select Month(s)", months, default=months)
     if sel:
         dfv = dfv[dfv["Month"].isin(sel)]
     if dfv.empty:
         st.info("No data for the selected month(s).")
         st.stop()
 
-    # show who is included
-    selected_names = ", ".join(sorted(dfv["Enforcer"].unique()))
-    st.caption(f"Showing data for: **{selected_names or '—'}**")
-
-    # KPIs
     k1, k2, k3 = st.columns(3)
     k1.metric("Total actions (selected months)", int(dfv["Quantity"].sum()))
     k2.metric("Active enforcers", dfv["Enforcer"].nunique())
     k3.metric("Months selected", len(sel) if sel else len(months))
 
-    # Totals per month (colored by Enforcer)
-    month_enf = dfv.groupby(["Month", "Enforcer"], as_index=False)["Quantity"].sum()
+    month_tot = dfv.groupby("Month", as_index=False)["Quantity"].sum()
     st.altair_chart(
-        alt.Chart(month_enf).mark_bar().encode(
+        alt.Chart(month_tot).mark_bar().encode(
             x=alt.X("Month:N", title="Month"),
             y=alt.Y("Quantity:Q", title="Total"),
-            color=alt.Color("Enforcer:N"),
-            tooltip=["Month:N", "Enforcer:N", "Quantity:Q"],
-        ).properties(height=280, title="Total Actions per Month (by Enforcer)"),
+            tooltip=["Month:N", "Quantity:Q"],
+        ).properties(height=280, title="Total Actions per Month"),
         use_container_width=True,
     )
 
-    # Category by month (stacked by enforcer, faceted by category)
-    cat_month_enf = dfv.groupby(["Month", "Category", "Enforcer"], as_index=False)["Quantity"].sum()
+    cat_month = dfv.groupby(["Month", "Category"], as_index=False)["Quantity"].sum()
     st.altair_chart(
-        alt.Chart(cat_month_enf).mark_bar().encode(
+        alt.Chart(cat_month).mark_bar().encode(
             x=alt.X("Month:N", title="Month"),
             y=alt.Y("Quantity:Q"),
-            color=alt.Color("Enforcer:N"),
             column=alt.Column("Category:N", title=None),
-            tooltip=["Month:N", "Category:N", "Enforcer:N", "Quantity:Q"],
-        ).properties(height=280, title="Category Breakdown by Month (stacked by Enforcer)")
-         .resolve_scale(y="independent"),
+            tooltip=["Month:N", "Category:N", "Quantity:Q"],
+        ).properties(height=280, title="Category Breakdown by Month").resolve_scale(y="independent"),
         use_container_width=True,
     )
 
-    download_filtered("Monthly filtered", dfv)
+# -------------------
+# Leaderboard + Donut (Always show at the bottom)
+# -------------------
+if not dfv.empty:
+    st.markdown("### 📌 Summary Charts")
+
+    col1, col2 = st.columns([1.5, 1])
+
+    # Leaderboard chart
+    with col1:
+        leader = dfv.groupby("Enforcer", as_index=False)["Quantity"].sum().sort_values("Quantity", ascending=False)
+        bar_chart = (
+            alt.Chart(leader)
+            .mark_bar()
+            .encode(
+                x=alt.X("Quantity:Q", title="Total"),
+                y=alt.Y("Enforcer:N", sort="-x", title="Enforcer"),
+                tooltip=["Enforcer:N", "Quantity:Q"],
+            )
+            .properties(height=300, title="Leaderboard (Enforcer Totals)")
+        )
+        st.altair_chart(bar_chart, use_container_width=True)
+
+    # Responsive donut chart
+    with col2:
+        cat_share = dfv.groupby("Category", as_index=False)["Quantity"].sum()
+        donut = (
+            alt.Chart(cat_share)
+            .mark_arc(innerRadius=80, outerRadius=140)
+            .encode(
+                theta=alt.Theta("Quantity:Q", stack=True),
+                color=alt.Color("Category:N", legend=alt.Legend(title="Category")),
+                tooltip=["Category:N", "Quantity:Q"],
+            )
+            .properties(height=300, title="Category Share")
+            .configure_view(stroke=None)
+        )
+        st.altair_chart(donut, use_container_width=True)
