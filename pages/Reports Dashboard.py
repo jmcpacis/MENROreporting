@@ -451,7 +451,7 @@ else:
         .sort_values("Quantity", ascending=False)
     )
     donut_m = (
-        alt.Chart(cat_share_m, title="Category Share (Selected Months)")
+        alt.Chart(cat_share_m, title="")
         .mark_arc(innerRadius=90, outerRadius=140)
         .encode(
             theta=alt.Theta("Quantity:Q", stack=True, title=None),
