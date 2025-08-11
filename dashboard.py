@@ -10,7 +10,14 @@ CREDS = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service
 client = gspread.authorize(CREDS)
 
 SHEET_ID = "1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg"
-sheet = client.open_by_key(SHEET_ID).sheet1
+# Open the Google Sheet
+spreadsheet = client.open_by_key(SHEET_ID)
+
+# Select worksheet based on enforcer's name (or create if it doesn't exist)
+try:
+    sheet = spreadsheet.worksheet(name)
+except gspread.exceptions.WorksheetNotFound:
+    sheet = spreadsheet.add_worksheet(title=name, rows="1000", cols="10")
 
 st.set_page_config(page_title="Environmental Enforcer Monitoring", layout="wide")
 st.title("🌿 Environmental Enforcer Monitoring Dashboard")
