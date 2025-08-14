@@ -11,7 +11,7 @@ from datetime import date, timedelta
 # Config
 # ======================
 SHEET_ID = "1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg"
-ENFORCERS = ["Enforcer 1", "Enforcer 2", "Enforcer 3", "Enforcer 4", "Enforcer 5"]
+ENFORCERS = ["", "Den Mark T. Caliguid", "Hardie Luis T. Teodoro", "John Jordan L. Cello", "Jan Lemuel F. Antazo", "Herlito R. Pillas", "Bench King O. Sunga", "Melvin A. Munar"]
 EXPECTED_HEADERS = ["Date", "Enforcer", "Category", "Activity", "Quantity", "Remarks"]
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
