@@ -1,5 +1,3 @@
-# Reports Dashboard.py
-
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -12,6 +10,8 @@ from datetime import date
 # Config
 # ======================
 SHEET_ID = "1O39vIMeCq-Z5GEWzoMM4xjNwiQNCeBa-pzGdOvp2zwg"
+
+# Use the real roster here (no empty string)
 ENFORCERS = [
     "Den Mark T. Caliguid",
     "Hardie Luis T. Teodoro",
@@ -21,19 +21,12 @@ ENFORCERS = [
     "Bench King O. Sunga",
     "Melvin A. Munar",
 ]
+
 EXPECTED_HEADERS = ["Date", "Enforcer", "Category", "Activity", "Quantity", "Remarks"]
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
 st.set_page_config(page_title="Reports Dashboard", layout="wide")
 st.title("📊 Reports Dashboard")
-
-# ===== Force reload button =====
-reload_col, _ = st.columns([1, 3])
-with reload_col:
-    if st.button("🔄 Force reload data (clear caches)"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.success("Caches cleared. The app will reload on the next interaction.")
 
 # ======================
 # Auth & Sheet
@@ -44,6 +37,7 @@ def get_spreadsheet():
         st.secrets["gcp_service_account"], SCOPE
     )
     client = gspread.authorize(creds)
+    # tiny retry for transient 5xx
     for i in range(3):
         try:
             return client.open_by_key(SHEET_ID)
@@ -58,6 +52,7 @@ spreadsheet = get_spreadsheet()
 # Category normalization
 # ======================
 def canonicalize_category(s: str) -> str:
+    """Collapse variants into one canonical label so duplicates merge."""
     if not isinstance(s, str):
         s = str(s)
     s = " ".join(s.strip().split())
@@ -67,7 +62,7 @@ def canonicalize_category(s: str) -> str:
     CANON_III = "III. Information, Education, and Communication (IEC) Campaign"
     CANON_IV  = "IV. Other Tasks"
 
-    if s.startswith("I. Issuance of Citation Tickets"):
+    if s.startswith("I. Issuance of Citation"):
         return CANON_I
     if s.startswith("II. Surveillance"):
         return CANON_II
@@ -85,88 +80,78 @@ CATEGORY_SHORT = {
 }
 
 # ======================
-# Load data (cached) — tab title attribution + source sheet + drop zero totals
+# Load data (cached)
 # ======================
 @st.cache_data(ttl=60)
-def load_all(cache_buster: int = 1):
+def load_all(worksheet_names: list[str]) -> pd.DataFrame:
     frames = []
-    for title in ENFORCERS:
+    for title in worksheet_names:
         try:
             ws = spreadsheet.worksheet(title)
         except gspread.exceptions.WorksheetNotFound:
             continue
-
-        recs = ws.get_all_records()  # list[dict] without header row
-        if not recs:
-            continue
-
-        df_t = pd.DataFrame(recs)
-
-        # Coerce types early
-        df_t["Quantity"] = pd.to_numeric(df_t.get("Quantity", 0), errors="coerce").fillna(0).astype(int)
-        df_t["Date"] = pd.to_datetime(df_t.get("Date"), errors="coerce")
-
-        # CRITICAL: trust the tab title, not the cell
-        df_t["Enforcer"] = title
-        # Track the physical origin of each row for debugging
-        df_t["__sheet__"] = title
-
-        # Normalize categories + short labels
-        if "Category" in df_t.columns:
-            df_t["Category"] = df_t["Category"].apply(canonicalize_category)
-            df_t["CategoryShort"] = df_t["Category"].map(lambda x: CATEGORY_SHORT.get(x, x))
-
-        frames.append(df_t)
+        recs = ws.get_all_records()
+        if recs:
+            frames.append(pd.DataFrame(recs))
 
     if not frames:
-        df = pd.DataFrame(columns=EXPECTED_HEADERS + ["CategoryShort", "__sheet__"])
+        df = pd.DataFrame(columns=EXPECTED_HEADERS)
     else:
         df = pd.concat(frames, ignore_index=True)
 
-    if "Date" in df.columns and not df.empty:
+    # Clean types
+    if "Quantity" in df.columns:
+        df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce").fillna(0).astype(int)
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df["Month"] = df["Date"].dt.strftime("%Y-%m")
 
-    # Prevent phantom totals: keep only positive actions
-    if not df.empty:
-        df = df[df["Quantity"] > 0].copy()
+    # Normalize category names
+    if "Category" in df.columns:
+        df["Category"] = df["Category"].apply(canonicalize_category)
+        df["CategoryShort"] = df["Category"].map(lambda x: CATEGORY_SHORT.get(x, x))
 
-    # Drop any accidental empty enforcers
+    # Clean enforcer whitespace
     if "Enforcer" in df.columns:
-        df = df[df["Enforcer"].astype(str).str.strip() != ""]
+        df["Enforcer"] = df["Enforcer"].astype(str).str.strip()
 
     return df
 
-df = load_all()
+df = load_all(ENFORCERS)
 
 # ======================
-# Controls (persisted with callbacks)
+# Controls
 # ======================
 left, right = st.columns(2)
 with left:
     view = st.radio("View", ["Daily", "Monthly"], horizontal=True)
 
+# Persisted filter
 if "enf_filter" not in st.session_state:
-    st.session_state["enf_filter"] = []
+    st.session_state.enf_filter = []
 
 def _select_all():
-    st.session_state["enf_filter"] = ENFORCERS[:]
+    st.session_state.enf_filter = ENFORCERS[:]
+    st.rerun()
 
 def _clear_all():
-    st.session_state["enf_filter"] = []
+    st.session_state.enf_filter = []
+    st.rerun()
 
 with right:
     chosen = st.multiselect(
         "Filter Enforcers",
         ENFORCERS,
-        default=st.session_state["enf_filter"],
+        default=st.session_state.enf_filter,
         key="enf_filter",
     )
-    c1, c2 = st.columns(2)
-    with c1:
+    b1, b2 = st.columns([1,1])
+    with b1:
         st.button("Select All", on_click=_select_all, use_container_width=True)
-    with c2:
+    with b2:
         st.button("Clear", on_click=_clear_all, use_container_width=True)
 
+# Treat empty selection as ALL
 effective_selection = chosen if chosen else ENFORCERS
 dfv = df[df["Enforcer"].isin(effective_selection)] if not df.empty else df
 
@@ -175,18 +160,21 @@ if dfv.empty:
     st.stop()
 
 # ======================
-# Helpers
+# KPI helpers
 # ======================
 def kpi_badge(delta_val: float, unit: str = "%"):
     if delta_val is None or pd.isna(delta_val):
         return
     arrow = "↔︎"; bg = "#F0F2F6"
-    if delta_val > 0: arrow, bg = "⬆️", "#E7F6EC"
-    elif delta_val < 0: arrow, bg = "⬇️", "#FDECEC"
+    if delta_val > 0:
+        arrow, bg = "⬆️", "#E7F6EC"
+    elif delta_val < 0:
+        arrow, bg = "⬇️", "#FDECEC"
     sign = "+" if delta_val > 0 else ""
+    label = f"{sign}{delta_val:.1f}{unit}"
     st.markdown(
         f"<span style='background:{bg}; padding:4px 8px; border-radius:20px; "
-        f"font-size:0.9rem;'>{arrow} {sign}{delta_val:.1f}{unit}</span>",
+        f"font-size:0.9rem;'>{arrow} {label}</span>",
         unsafe_allow_html=True,
     )
 
@@ -204,19 +192,6 @@ def download_filtered(name: str, frame: pd.DataFrame):
     )
 
 # ======================
-# DEBUG PANEL (to catch any phantom totals)
-# ======================
-with st.expander("🐞 Debug: rows contributing to a specific enforcer"):
-    debug_enf = st.selectbox("Pick an enforcer to inspect", [""] + ENFORCERS, index=0)
-    if debug_enf:
-        dbg = df[df["Enforcer"] == debug_enf].copy()
-        st.write(f"Rows found: {len(dbg)}")
-        if not dbg.empty:
-            cols = ["__sheet__", "Date", "Category", "Activity", "Quantity", "Remarks"]
-            st.dataframe(dbg[cols].sort_values(["Date", "Category", "Activity"]), use_container_width=True)
-            st.caption("If this table is empty, there is no data for that enforcer in the current dataset.")
-
-# ======================
 # DAILY VIEW
 # ======================
 if view == "Daily":
@@ -225,15 +200,20 @@ if view == "Daily":
         st.stop()
 
     min_d, max_d = dfv["Date"].min().date(), dfv["Date"].max().date()
-    d1, d2 = st.date_input("Date range", (min_d, max_d), min_value=min_d, max_value=max_d)
+    d1, d2 = st.date_input(
+        "Date range",
+        (min_d, max_d),
+        min_value=min_d,
+        max_value=max_d,
+    )
 
     dfv = dfv[(dfv["Date"] >= pd.to_datetime(d1)) & (dfv["Date"] <= pd.to_datetime(d2))]
     if dfv.empty:
         st.info("No data in the selected date range.")
         st.stop()
 
+    # --- KPIs ---
     total_today = int(dfv["Quantity"].sum())
-
     span_days = (pd.to_datetime(d2) - pd.to_datetime(d1)).days + 1
     prev_start = pd.to_datetime(d1) - pd.Timedelta(days=span_days)
     prev_end = pd.to_datetime(d1) - pd.Timedelta(days=1)
@@ -243,83 +223,103 @@ if view == "Daily":
     pct_vs_yday = percent_change(total_today, total_prev)
 
     prod = (
-        dfv.groupby("Enforcer", as_index=False)["Quantity"]
-           .sum()
-           .query("Quantity > 0")  # hide zero totals explicitly
-           .sort_values("Quantity", ascending=False)
+        dfv.groupby("Enforcer", as_index=False)["Quantity"].sum()
+        .sort_values("Quantity", ascending=False)
     )
     top_enforcer = prod.iloc[0]["Enforcer"] if not prod.empty else "—"
     top_enforcer_actions = int(prod.iloc[0]["Quantity"]) if not prod.empty else 0
 
-    denom = len([e for e in effective_selection if e])
-    pct_active = 100.0 * (dfv["Enforcer"].nunique() / denom) if denom else 0.0
+    pct_active = 100.0 * (dfv["Enforcer"].nunique() / len(effective_selection)) if len(effective_selection) else 0.0
 
     year_start = pd.to_datetime(date.today().replace(month=1, day=1))
     ytd_df = df[(df["Enforcer"].isin(effective_selection)) & (df["Date"] >= year_start)]
     ytd_total = int(ytd_df["Quantity"].sum()) if not ytd_df.empty else 0
 
-    # KPIs
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
         st.caption("Most productive enforcer")
         st.subheader(f"{top_enforcer}")
         kpi_badge(top_enforcer_actions, unit=" actions")
-    with k2:
+    with c2:
         st.caption("% of enforcers active")
         st.subheader(f"{pct_active:.1f}%")
-    with k3:
+    with c3:
         st.caption("Change vs yesterday")
         st.subheader(f"{total_today} actions")
         kpi_badge(pct_vs_yday)
-    with k4:
+    with c4:
         st.caption("Cumulative total (YTD)")
         st.subheader(f"{ytd_total}")
 
-    # Line: totals by day
+    # --- Charts ---
     daily_tot = dfv.groupby("Date", as_index=False)["Quantity"].sum()
     st.altair_chart(
-        alt.Chart(daily_tot).mark_line(point=True).encode(
+        alt.Chart(daily_tot)
+        .mark_line(point=True)
+        .encode(
             x=alt.X("Date:T", title="Date"),
             y=alt.Y("Quantity:Q", title="Total"),
             tooltip=["Date:T", "Quantity:Q"],
-        ).properties(height=260, title="Total Actions per Day"),
+        )
+        .properties(height=260, title="Total Actions per Day"),
         use_container_width=True,
     )
 
-    # Category breakdown (stacked by Enforcer)
     cat_tot = dfv.groupby(["Category", "CategoryShort", "Enforcer"], as_index=False)["Quantity"].sum()
     st.altair_chart(
-        alt.Chart(cat_tot).mark_bar().encode(
+        alt.Chart(cat_tot)
+        .mark_bar()
+        .encode(
             x=alt.X("Quantity:Q", title="Total"),
             y=alt.Y("CategoryShort:N", sort="-x", title="Category"),
             color=alt.Color("Enforcer:N"),
             tooltip=["Category:N", "Enforcer:N", "Quantity:Q"],
-        ).properties(height=320, title="Category Breakdown (stacked by Enforcer)"),
+        )
+        .properties(height=320, title="Category Breakdown (stacked by Enforcer)"),
         use_container_width=True,
     )
 
-    # Leaderboard
+    # Leaderboard — SAFE reindex (prevents phantom 1s)
+    leader = (
+        dfv.groupby("Enforcer", as_index=False)["Quantity"].sum()
+        .set_index("Enforcer")
+        .reindex(effective_selection, fill_value=0)   # <- key line
+        .reset_index()
+    )
+    leader["Quantity"] = pd.to_numeric(leader["Quantity"], errors="coerce").fillna(0).astype(int)
+
     st.markdown("### 📌 Summary Charts")
     st.altair_chart(
-        alt.Chart(prod).mark_bar().encode(
+        alt.Chart(leader)
+        .mark_bar()
+        .encode(
             x=alt.X("Quantity:Q", title="Total"),
             y=alt.Y("Enforcer:N", sort="-x", title="Enforcer"),
             tooltip=["Enforcer:N", "Quantity:Q"],
-        ).properties(height=320, title="Leaderboard (Enforcer Totals)").configure_view(stroke=None),
+        )
+        .properties(height=320, title="Leaderboard (Enforcer Totals)")
+        .configure_view(stroke=None),
         use_container_width=True,
     )
 
-    # Donut — centered with legend below
-    cat_share = (dfv.groupby(["Category", "CategoryShort"], as_index=False)["Quantity"]
-                 .sum().sort_values("Quantity", ascending=False))
+    # Donut (centered, legend on new line)
+    cat_share = (
+        dfv.groupby(["Category", "CategoryShort"], as_index=False)["Quantity"].sum()
+        .sort_values("Quantity", ascending=False)
+    )
     donut = (
-        alt.Chart(cat_share)
+        alt.Chart(cat_share, title="")
         .mark_arc(innerRadius=90, outerRadius=140)
         .encode(
             theta=alt.Theta("Quantity:Q", stack=True, title=None),
             color=alt.Color(
                 "CategoryShort:N",
-                legend=alt.Legend(title="Category", orient="bottom", columns=1, labelLimit=10000),
+                legend=alt.Legend(
+                    title="Category",
+                    orient="bottom",
+                    columns=1,
+                    labelLimit=10000
+                ),
             ),
             tooltip=["Category:N", "Quantity:Q"],
         )
@@ -330,15 +330,17 @@ if view == "Daily":
     with mid:
         st.altair_chart(donut, use_container_width=False)
 
-    # Heatmap
     heat = dfv.groupby(["CategoryShort", "Enforcer"], as_index=False)["Quantity"].sum()
     st.altair_chart(
-        alt.Chart(heat).mark_rect().encode(
+        alt.Chart(heat)
+        .mark_rect()
+        .encode(
             x=alt.X("Enforcer:N", title=None),
             y=alt.Y("CategoryShort:N", title=None),
             color=alt.Color("Quantity:Q", title="Qty"),
             tooltip=["CategoryShort:N", "Enforcer:N", "Quantity:Q"],
-        ).properties(height=280, title="Heatmap: Category × Enforcer"),
+        )
+        .properties(height=280, title="Heatmap: Category × Enforcer"),
         use_container_width=True,
     )
 
@@ -348,8 +350,8 @@ if view == "Daily":
 # MONTHLY VIEW
 # ======================
 else:
-    months_all = sorted(dfv["Month"].dropna().unique())
-    sel = st.multiselect("Select Month(s)", months_all, default=months_all)
+    months = sorted(dfv["Month"].dropna().unique())
+    sel = st.multiselect("Select Month(s)", months, default=months)
     if sel:
         dfv = dfv[dfv["Month"].isin(sel)]
     if dfv.empty:
@@ -358,7 +360,7 @@ else:
 
     total_month = int(dfv["Quantity"].sum())
 
-    # Compare to immediately preceding block of equal length
+    # Compare to preceding block of equal length
     if sel:
         sel_sorted = sorted(sel)
         block_len = len(sel_sorted)
@@ -369,9 +371,9 @@ else:
                 return f"{y-1}-12"
             return f"{y}-{m-1:02d}"
 
-        prev_end = prev_month(sel_sorted[0])
+        prev_end_m = prev_month(sel_sorted[0])
         prev_block = []
-        cur = prev_end
+        cur = prev_end_m
         for _ in range(block_len):
             prev_block.append(cur)
             cur = prev_month(cur)
@@ -384,74 +386,84 @@ else:
     pct_vs_prev_months = percent_change(total_month, total_prev)
 
     prod_m = (
-        dfv.groupby("Enforcer", as_index=False)["Quantity"]
-           .sum()
-           .query("Quantity > 0")
-           .sort_values("Quantity", ascending=False)
+        dfv.groupby("Enforcer", as_index=False)["Quantity"].sum()
+        .sort_values("Quantity", ascending=False)
     )
     top_enforcer_m = prod_m.iloc[0]["Enforcer"] if not prod_m.empty else "—"
     top_enforcer_actions_m = int(prod_m.iloc[0]["Quantity"]) if not prod_m.empty else 0
 
-    denom = len([e for e in effective_selection if e])
-    pct_active_m = 100.0 * (dfv["Enforcer"].nunique() / denom) if denom else 0.0
+    pct_active_m = 100.0 * (dfv["Enforcer"].nunique() / len(effective_selection)) if len(effective_selection) else 0.0
 
     year_start = pd.to_datetime(date.today().replace(month=1, day=1))
     ytd_df = df[(df["Enforcer"].isin(effective_selection)) & (df["Date"] >= year_start)]
     ytd_total = int(ytd_df["Quantity"].sum()) if not ytd_df.empty else 0
 
-    # KPIs
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
         st.caption("Most productive enforcer")
         st.subheader(f"{top_enforcer_m}")
         kpi_badge(top_enforcer_actions_m, unit=" actions")
-    with k2:
+    with c2:
         st.caption("% of enforcers active")
         st.subheader(f"{pct_active_m:.1f}%")
-    with k3:
+    with c3:
         st.caption("Change vs last month(s)")
         st.subheader(f"{total_month} actions")
         kpi_badge(pct_vs_prev_months)
-    with k4:
+    with c4:
         st.caption("Cumulative total (YTD)")
         st.subheader(f"{ytd_total}")
 
     # Totals per month (by Enforcer)
     month_enf = dfv.groupby(["Month", "Enforcer"], as_index=False)["Quantity"].sum()
     st.altair_chart(
-        alt.Chart(month_enf).mark_bar().encode(
+        alt.Chart(month_enf)
+        .mark_bar()
+        .encode(
             x=alt.X("Month:N", title="Month"),
             y=alt.Y("Quantity:Q", title="Total"),
             color=alt.Color("Enforcer:N"),
             tooltip=["Month:N", "Enforcer:N", "Quantity:Q"],
-        ).properties(height=280, title="Total Actions per Month (by Enforcer)"),
+        )
+        .properties(height=280, title="Total Actions per Month (by Enforcer)"),
         use_container_width=True,
     )
 
     # Category by month (stacked by Enforcer, faceted by Category)
     cat_month_enf = dfv.groupby(["Month", "Category", "CategoryShort", "Enforcer"], as_index=False)["Quantity"].sum()
     st.altair_chart(
-        alt.Chart(cat_month_enf).mark_bar().encode(
+        alt.Chart(cat_month_enf)
+        .mark_bar()
+        .encode(
             x=alt.X("Month:N", title="Month"),
             y=alt.Y("Quantity:Q"),
             color=alt.Color("Enforcer:N"),
             column=alt.Column("CategoryShort:N", title=None),
             tooltip=["Month:N", "Category:N", "Enforcer:N", "Quantity:Q"],
-        ).properties(height=280, title="Category Breakdown by Month (stacked by Enforcer)")
-         .resolve_scale(y="independent"),
+        )
+        .properties(height=280, title="Category Breakdown by Month (stacked by Enforcer)")
+        .resolve_scale(y="independent"),
         use_container_width=True,
     )
 
-    # Donut (same centered layout)
-    cat_share_m = (dfv.groupby(["Category", "CategoryShort"], as_index=False)["Quantity"]
-                   .sum().sort_values("Quantity", ascending=False))
+    # Donut (centered)
+    cat_share_m = (
+        dfv.groupby(["Category", "CategoryShort"], as_index=False)["Quantity"].sum()
+        .sort_values("Quantity", ascending=False)
+    )
     donut_m = (
-        alt.Chart(cat_share_m).mark_arc(innerRadius=90, outerRadius=140)
+        alt.Chart(cat_share_m, title="")
+        .mark_arc(innerRadius=90, outerRadius=140)
         .encode(
             theta=alt.Theta("Quantity:Q", stack=True, title=None),
             color=alt.Color(
                 "CategoryShort:N",
-                legend=alt.Legend(title="Category", orient="bottom", columns=1, labelLimit=10000),
+                legend=alt.Legend(
+                    title="Category",
+                    orient="bottom",
+                    columns=1,
+                    labelLimit=10000
+                ),
             ),
             tooltip=["Category:N", "Quantity:Q"],
         )
