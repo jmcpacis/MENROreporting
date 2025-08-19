@@ -27,6 +27,14 @@ SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 st.set_page_config(page_title="Reports Dashboard", layout="wide")
 st.title("📊 Reports Dashboard")
 
+# ===== Force reload button =====
+reload_col, _ = st.columns([1, 3])
+with reload_col:
+    if st.button("🔄 Force reload data (clear caches)"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.success("Caches cleared. The app will reload on the next interaction.")
+
 # ======================
 # Auth & Sheet
 # ======================
@@ -50,10 +58,9 @@ spreadsheet = get_spreadsheet()
 # Category normalization
 # ======================
 def canonicalize_category(s: str) -> str:
-    """Collapse variants into one canonical label so duplicates merge."""
     if not isinstance(s, str):
         s = str(s)
-    s = " ".join(s.strip().split())  # trim + collapse spaces
+    s = " ".join(s.strip().split())
 
     CANON_I   = "I. Issuance of Citation Tickets"
     CANON_II  = "II. Surveillance, Investigation, Monitoring, Documentation, and Inspection"
@@ -78,10 +85,10 @@ CATEGORY_SHORT = {
 }
 
 # ======================
-# Load data (cached) — FIXED to use tab title as Enforcer and drop zero totals
+# Load data (cached) — tab title attribution + source sheet + drop zero totals
 # ======================
 @st.cache_data(ttl=60)
-def load_all():
+def load_all(cache_buster: int = 1):
     frames = []
     for title in ENFORCERS:
         try:
@@ -95,14 +102,16 @@ def load_all():
 
         df_t = pd.DataFrame(recs)
 
-        # Types
+        # Coerce types early
         df_t["Quantity"] = pd.to_numeric(df_t.get("Quantity", 0), errors="coerce").fillna(0).astype(int)
         df_t["Date"] = pd.to_datetime(df_t.get("Date"), errors="coerce")
 
         # CRITICAL: trust the tab title, not the cell
         df_t["Enforcer"] = title
+        # Track the physical origin of each row for debugging
+        df_t["__sheet__"] = title
 
-        # Normalize categories
+        # Normalize categories + short labels
         if "Category" in df_t.columns:
             df_t["Category"] = df_t["Category"].apply(canonicalize_category)
             df_t["CategoryShort"] = df_t["Category"].map(lambda x: CATEGORY_SHORT.get(x, x))
@@ -110,14 +119,14 @@ def load_all():
         frames.append(df_t)
 
     if not frames:
-        df = pd.DataFrame(columns=EXPECTED_HEADERS + ["CategoryShort"])
+        df = pd.DataFrame(columns=EXPECTED_HEADERS + ["CategoryShort", "__sheet__"])
     else:
         df = pd.concat(frames, ignore_index=True)
 
     if "Date" in df.columns and not df.empty:
         df["Month"] = df["Date"].dt.strftime("%Y-%m")
 
-    # Prevent phantom totals: show only positive actions
+    # Prevent phantom totals: keep only positive actions
     if not df.empty:
         df = df[df["Quantity"] > 0].copy()
 
@@ -169,7 +178,6 @@ if dfv.empty:
 # Helpers
 # ======================
 def kpi_badge(delta_val: float, unit: str = "%"):
-    """Render a compact up/down badge with color."""
     if delta_val is None or pd.isna(delta_val):
         return
     arrow = "↔︎"; bg = "#F0F2F6"
@@ -196,6 +204,19 @@ def download_filtered(name: str, frame: pd.DataFrame):
     )
 
 # ======================
+# DEBUG PANEL (to catch any phantom totals)
+# ======================
+with st.expander("🐞 Debug: rows contributing to a specific enforcer"):
+    debug_enf = st.selectbox("Pick an enforcer to inspect", [""] + ENFORCERS, index=0)
+    if debug_enf:
+        dbg = df[df["Enforcer"] == debug_enf].copy()
+        st.write(f"Rows found: {len(dbg)}")
+        if not dbg.empty:
+            cols = ["__sheet__", "Date", "Category", "Activity", "Quantity", "Remarks"]
+            st.dataframe(dbg[cols].sort_values(["Date", "Category", "Activity"]), use_container_width=True)
+            st.caption("If this table is empty, there is no data for that enforcer in the current dataset.")
+
+# ======================
 # DAILY VIEW
 # ======================
 if view == "Daily":
@@ -204,19 +225,13 @@ if view == "Daily":
         st.stop()
 
     min_d, max_d = dfv["Date"].min().date(), dfv["Date"].max().date()
-    d1, d2 = st.date_input(
-        "Date range",
-        (min_d, max_d),
-        min_value=min_d,
-        max_value=max_d,
-    )
+    d1, d2 = st.date_input("Date range", (min_d, max_d), min_value=min_d, max_value=max_d)
 
     dfv = dfv[(dfv["Date"] >= pd.to_datetime(d1)) & (dfv["Date"] <= pd.to_datetime(d2))]
     if dfv.empty:
         st.info("No data in the selected date range.")
         st.stop()
 
-    # KPI computations
     total_today = int(dfv["Quantity"].sum())
 
     span_days = (pd.to_datetime(d2) - pd.to_datetime(d1)).days + 1
@@ -230,7 +245,7 @@ if view == "Daily":
     prod = (
         dfv.groupby("Enforcer", as_index=False)["Quantity"]
            .sum()
-           .query("Quantity > 0")     # hide zero totals
+           .query("Quantity > 0")  # hide zero totals explicitly
            .sort_values("Quantity", ascending=False)
     )
     top_enforcer = prod.iloc[0]["Enforcer"] if not prod.empty else "—"
@@ -243,7 +258,7 @@ if view == "Daily":
     ytd_df = df[(df["Enforcer"].isin(effective_selection)) & (df["Date"] >= year_start)]
     ytd_total = int(ytd_df["Quantity"].sum()) if not ytd_df.empty else 0
 
-    # KPI row (same set as Monthly)
+    # KPIs
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.caption("Most productive enforcer")
@@ -384,7 +399,7 @@ else:
     ytd_df = df[(df["Enforcer"].isin(effective_selection)) & (df["Date"] >= year_start)]
     ytd_total = int(ytd_df["Quantity"].sum()) if not ytd_df.empty else 0
 
-    # KPIs (same as Daily)
+    # KPIs
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.caption("Most productive enforcer")
