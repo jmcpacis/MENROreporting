@@ -24,8 +24,8 @@ ENFORCERS = [
 EXPECTED_HEADERS = ["Date", "Enforcer", "Category", "Activity", "Quantity", "Remarks"]
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-st.set_page_config(page_title="Manager Dashboard", layout="wide")
-st.title("📊 Manager Dashboard (All Enforcers)")
+st.set_page_config(page_title="Reports Dashboard", layout="wide")
+st.title("📊 Reports Dashboard")
 
 # ======================
 # Auth & Sheet
@@ -78,7 +78,7 @@ CATEGORY_SHORT = {
 }
 
 # ======================
-# Load data (cached)
+# Load data (cached) — FIXED to use tab title as Enforcer and drop zero totals
 # ======================
 @st.cache_data(ttl=60)
 def load_all():
@@ -88,24 +88,42 @@ def load_all():
             ws = spreadsheet.worksheet(title)
         except gspread.exceptions.WorksheetNotFound:
             continue
-        recs = ws.get_all_records()
-        if recs:
-            frames.append(pd.DataFrame(recs))
+
+        recs = ws.get_all_records()  # list[dict] without header row
+        if not recs:
+            continue
+
+        df_t = pd.DataFrame(recs)
+
+        # Types
+        df_t["Quantity"] = pd.to_numeric(df_t.get("Quantity", 0), errors="coerce").fillna(0).astype(int)
+        df_t["Date"] = pd.to_datetime(df_t.get("Date"), errors="coerce")
+
+        # CRITICAL: trust the tab title, not the cell
+        df_t["Enforcer"] = title
+
+        # Normalize categories
+        if "Category" in df_t.columns:
+            df_t["Category"] = df_t["Category"].apply(canonicalize_category)
+            df_t["CategoryShort"] = df_t["Category"].map(lambda x: CATEGORY_SHORT.get(x, x))
+
+        frames.append(df_t)
 
     if not frames:
-        df = pd.DataFrame(columns=EXPECTED_HEADERS)
+        df = pd.DataFrame(columns=EXPECTED_HEADERS + ["CategoryShort"])
     else:
         df = pd.concat(frames, ignore_index=True)
 
-    if "Quantity" in df.columns:
-        df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce").fillna(0).astype(int)
     if "Date" in df.columns and not df.empty:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df["Month"] = df["Date"].dt.strftime("%Y-%m")
 
-    if "Category" in df.columns and not df.empty:
-        df["Category"] = df["Category"].apply(canonicalize_category)
-        df["CategoryShort"] = df["Category"].map(lambda x: CATEGORY_SHORT.get(x, x))
+    # Prevent phantom totals: show only positive actions
+    if not df.empty:
+        df = df[df["Quantity"] > 0].copy()
+
+    # Drop any accidental empty enforcers
+    if "Enforcer" in df.columns:
+        df = df[df["Enforcer"].astype(str).str.strip() != ""]
 
     return df
 
@@ -209,18 +227,23 @@ if view == "Daily":
     total_prev = int(prev_df["Quantity"].sum()) if not prev_df.empty else 0
     pct_vs_yday = percent_change(total_today, total_prev)
 
-    prod = (dfv.groupby("Enforcer", as_index=False)["Quantity"]
-            .sum().sort_values("Quantity", ascending=False))
+    prod = (
+        dfv.groupby("Enforcer", as_index=False)["Quantity"]
+           .sum()
+           .query("Quantity > 0")     # hide zero totals
+           .sort_values("Quantity", ascending=False)
+    )
     top_enforcer = prod.iloc[0]["Enforcer"] if not prod.empty else "—"
     top_enforcer_actions = int(prod.iloc[0]["Quantity"]) if not prod.empty else 0
 
-    pct_active = 100.0 * (dfv["Enforcer"].nunique() / len(effective_selection)) if len(effective_selection) else 0.0
+    denom = len([e for e in effective_selection if e])
+    pct_active = 100.0 * (dfv["Enforcer"].nunique() / denom) if denom else 0.0
 
     year_start = pd.to_datetime(date.today().replace(month=1, day=1))
     ytd_df = df[(df["Enforcer"].isin(effective_selection)) & (df["Date"] >= year_start)]
     ytd_total = int(ytd_df["Quantity"].sum()) if not ytd_df.empty else 0
 
-    # KPI row (same set used in Monthly)
+    # KPI row (same set as Monthly)
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.caption("Most productive enforcer")
@@ -345,18 +368,23 @@ else:
 
     pct_vs_prev_months = percent_change(total_month, total_prev)
 
-    prod_m = (dfv.groupby("Enforcer", as_index=False)["Quantity"]
-              .sum().sort_values("Quantity", ascending=False))
+    prod_m = (
+        dfv.groupby("Enforcer", as_index=False)["Quantity"]
+           .sum()
+           .query("Quantity > 0")
+           .sort_values("Quantity", ascending=False)
+    )
     top_enforcer_m = prod_m.iloc[0]["Enforcer"] if not prod_m.empty else "—"
     top_enforcer_actions_m = int(prod_m.iloc[0]["Quantity"]) if not prod_m.empty else 0
 
-    pct_active_m = 100.0 * (dfv["Enforcer"].nunique() / len(effective_selection)) if len(effective_selection) else 0.0
+    denom = len([e for e in effective_selection if e])
+    pct_active_m = 100.0 * (dfv["Enforcer"].nunique() / denom) if denom else 0.0
 
     year_start = pd.to_datetime(date.today().replace(month=1, day=1))
     ytd_df = df[(df["Enforcer"].isin(effective_selection)) & (df["Date"] >= year_start)]
     ytd_total = int(ytd_df["Quantity"].sum()) if not ytd_df.empty else 0
 
-    # KPIs (same layout as Daily)
+    # KPIs (same as Daily)
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.caption("Most productive enforcer")
